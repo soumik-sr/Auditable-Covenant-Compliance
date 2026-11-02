@@ -1,0 +1,210 @@
+\documentclass[10pt,letterpaper]{article}
+\usepackage[margin=0.55in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{enumitem}
+\setlist{nosep}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric,arrows.meta,positioning}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+
+\definecolor{accent}{HTML}{1F5FA8}
+\definecolor{aicol}{HTML}{C77700}
+\definecolor{codecol}{HTML}{1F5FA8}
+\definecolor{humcol}{HTML}{2C7A2C}
+\definecolor{alert}{HTML}{B00020}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{2.5pt}
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.08}
+\setlength{\emergencystretch}{2em}
+
+\titleformat{\section}{\large\bfseries\color{accent}}{\thesection.}{0.5em}{}[{\color{accent!40}\titlerule[0.4pt]}]
+\titlespacing*{\section}{0pt}{8pt}{4pt}
+
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0.3pt}
+\lhead{\scriptsize\textcolor{gray}{Auditable Covenant Compliance -- Take-Home Brief}}
+\rhead{\scriptsize\textcolor{gray}{Page \thepage\ of 4}}
+\setlength{\headheight}{12pt}
+\setlength{\footskip}{14pt}
+
+\newcommand{\ct}[1]{\texttt{\small #1}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcommand{\tabsize}{\footnotesize}
+
+\begin{document}
+
+{\raggedright\Large\bfseries\color{accent} Auditable Covenant Compliance: let the LLM read the contract once, let code compute it every quarter\par}
+\vspace{-3pt}{\color{accent}\rule{\linewidth}{1.2pt}}
+
+\textbf{Domain:} commercial-loan financial-covenant monitoring. \textbf{Jurisdiction:} US credit agreements (NY law). \textbf{Data:} a real public agreement from SEC EDGAR, Viad Corp's Credit Agreement of 30~Jul 2021 (accession 0001564590-21-039835) and its First Amendment of 23~Mar 2022 (0000950170-22-004478). \textbf{Borrower financials are synthetic. Cost figures are my estimates, not sourced data.} For another jurisdiction the definitions and amendment conventions change; the architecture does not.
+
+\textbf{What surprised me.} The ratio math is trivial (net debt / EBITDA); the risk is the \emph{definition}. Reading the real agreement made that concrete: (1)~``Consolidated EBITDA'' allows run-rate cost savings only up to \textbf{20.0\%} of EBITDA calculated before that add-back; (2)~``Unrestricted Cash'' may be netted in full, \emph{unless} revolver borrowings exceed \$10,000,000, when it is capped at \$50,000,000, a conditional that a flat formula cannot express; (3)~Section~1.04 prescribes a rounding rule (carry the ratio one place beyond its stated precision, round to nearest, ties up) that decides whether 4.505x breaches 4.50x; (4)~a First Amendment, one year later, \textbf{restated the covenant levels} (5.25x stepping down to 4.00x). The base agreement alone gives the wrong answer for every date after March 2022, so a missing amendment is a real failure mode, not a hypothetical one.
+
+%------------------------------------------------------------------
+\section{Problem statement}
+\begin{tabularx}{\linewidth}{@{}l Y@{}}
+\toprule
+\tabsize\textbf{Who} & \tabsize Covenant-monitoring analysts in credit administration at a mid-market lender; the credit officer who signs findings. \\
+\midrule
+\tabsize\textbf{Task} & \tabsize Each quarter, per borrower: find the financial covenants in a 100--300 page agreement, apply every amendment, take inputs from the financials, recompute the ratios under the contract's own definitions, flag breaches and thin headroom. \\
+\midrule
+\tabsize\textbf{Frequency} & \tabsize Quarterly. About 400 borrowers gives about 1,600 tests a year; certificates are due about 45 days after quarter end, so about 60\% land in one 3-week window. \\
+\midrule
+\tabsize\textbf{Cost today} & \tabsize About 4.5\,h per test, about 7,200\,h a year, roughly 4 FTE, about \$650K a year at \$90/h loaded. The larger cost is a breach found late or a false pass. \\
+\midrule
+\tabsize\textbf{Out of scope} & \tabsize Waiver and legal-notice decisions, pricing and rating, non-financial covenants, equity-cure and Acquisition-Period alternatives (recorded in each spec as ``not modelled''), pro-forma adjustments, any real client data. Decision support, not legal advice. \\
+\bottomrule
+\end{tabularx}
+
+%------------------------------------------------------------------
+\section{Solution design}
+\textbf{Core idea.} The LLM interprets the contract \textbf{once per agreement version} into a typed \ct{CovenantSpec} built from nine AST node types. Code verifies every quotation, a human signs the approval, and a deterministic engine computes every quarter. \textbf{Why AI at all:} definitions are bespoke prose with cross-references; reading them is the one step regex and templates cannot do. Where a register or form already gives structured data, no AI is needed.
+
+\begin{center}
+\begin{tikzpicture}[
+  x=1cm,y=1cm,
+  box/.style={draw,rounded corners=2pt,fill=white,line width=0.8pt,minimum width=2.2cm,minimum height=0.75cm,
+              align=center,font=\fontsize{6.4}{7.4}\selectfont\sffamily,inner sep=1.5pt},
+  aibox/.style={box,draw=aicol},
+  codebox/.style={box,draw=codecol},
+  humbox/.style={box,draw=humcol},
+  arr/.style={-{Stealth[length=3.6pt]},line width=0.8pt,draw=black!80},
+  retry/.style={-{Stealth[length=3.6pt]},line width=0.8pt,dashed,draw=alert},
+  spec/.style={-{Stealth[length=3.6pt]},line width=0.8pt,dotted,draw=black!60},
+  lanelabel/.style={font=\scriptsize\sffamily,align=left,anchor=west,inner sep=2pt}
+]
+\newcommand{\lanes}[4]{%
+  \fill[aicol!10]   (0,#1) rectangle (18.7,#1-1.0);   \draw[aicol]   (0,#1) rectangle (18.7,#1-1.0);
+  \fill[codecol!8]  (0,#1-1.0) rectangle (18.7,#1-2.0); \draw[codecol] (0,#1-1.0) rectangle (18.7,#1-2.0);
+  \fill[humcol!9]   (0,#1-2.0) rectangle (18.7,#1-3.0); \draw[humcol]  (0,#1-2.0) rectangle (18.7,#1-3.0);
+  \node[lanelabel,text=aicol]   at (0.05,#1-0.5) {\textbf{AI}\\[-1pt]probabilistic};
+  \node[lanelabel,text=codecol] at (0.05,#1-1.5) {\textbf{CODE}\\[-1pt]deterministic};
+  \node[lanelabel,text=humcol]  at (0.05,#1-2.5) {\textbf{HUMAN}\\[-1pt]audit gate};
+  \node[anchor=south #3,font=\small\sffamily\bfseries] at (#4,#1+0.04) {#2};
+}
+% columns: centre x = 3.0 + 2.433*i
+\lanes{0}{Lane A: compile the contract (once per agreement or amendment)}{west}{0}
+\node[codebox] (a1) at (3.0,-1.5)   {A1 Ingest SEC\\text, hash};
+\node[codebox] (a2) at (5.433,-1.5) {A2 Select\\clauses};
+\node[aibox]   (a3) at (7.866,-0.5) {A3 LLM drafts\\spec (untrusted)};
+\node[codebox] (a4) at (10.299,-1.5) {A4 Parse, locate\\quotes, validate};
+\node[codebox] (a5) at (12.732,-1.5) {A5 Verify, seal,\\semantic checks};
+\node[humbox]  (a6) at (15.165,-2.5) {A6 Gate 1: signed\\approval};
+\node[codebox] (a7) at (17.598,-1.5) {A7 Registry\\(attestation ok)};
+\foreach \s/\t in {a1/a2,a2/a3,a3/a4,a4/a5,a5/a6,a6/a7}{\draw[arr] (\s.east) -- ++(0.116,0) |- (\t.west);}
+\draw[retry] ([xshift=-0.5cm]a4.north) -- ++(0,0.175) -| ([xshift=0.5cm]a3.south);
+\node[font=\fontsize{6.4}{7.4}\selectfont\sffamily,text=alert,anchor=west,align=left] at (9.2,-0.5) {fail: validation messages only,\\max 2 attempts, then ESCALATED};
+\lanes{-4.3}{Lane B: quarterly test (every borrower, every period)}{east}{18.7}
+\node[aibox]   (b1) at (3.0,-4.8)   {B1 Extract facts\\(untrusted)};
+\node[codebox] (b2) at (5.433,-5.8) {B2 Verify, seal,\\tie-outs};
+\node[codebox] (b3) at (7.866,-5.8) {B3 Evaluate AST,\\round, classify};
+\node[humbox]  (b4) at (10.299,-6.8) {B4 Gate 2: review\\breach/thin/sample};
+\node[codebox] (b5) at (12.732,-5.8) {B5 Sealed,\\hash-chained log};
+\foreach \s/\t in {b1/b2,b2/b3,b3/b4,b4/b5}{\draw[arr] (\s.east) -- ++(0.116,0) |- (\t.west);}
+\draw[spec] (a7.south) -- (17.598,-3.65) -- (3.0,-3.65) -- (b1.north);
+\node[font=\fontsize{6.4}{7.4}\selectfont\sffamily,text=black!70,fill=white,inner sep=1pt] at (10.2,-3.65) {approved, signed, hashed spec drives every quarterly test};
+\node[font=\fontsize{6.4}{7.4}\selectfont\sffamily,text=alert,anchor=north] at (9.35,-7.6) {STALE: an amendment, restatement or revoked spec is a ledger event that re-opens Lane A and re-queues dependent results};
+\end{tikzpicture}
+\end{center}
+\vspace{-6pt}
+
+\begin{tabularx}{\linewidth}{@{}p{1.0cm} p{1.5cm} Y@{}}
+\toprule
+\tabsize\textbf{Stage} & \tabsize\textbf{Actor} & \tabsize\textbf{What happens} \\
+\midrule
+\tabsize A1--A2 & \tabsize Code & \tabsize Download from SEC, split at page breaks, canonicalise, SHA-256 the text. Select the covenant pages and follow the defined terms the ratio uses, to a bounded depth; list the terms \textbf{not} read. \\
+\tabsize A3 & \tabsize \textbf{AI} & \tabsize Drafts the spec as JSON. Each constant, input and threshold carries \ct{\{document, page, quote\}}. Offsets and hashes are never taken from the model. It has no tools. \\
+\tabsize A4 & \tabsize Code & \tabsize Reject the whole answer if it contains forbidden fields (\ct{verified}, \ct{approval}, \ct{status}, \ct{seal}, code or tool calls). Locate each quote in the stored text (must be exact and unique). Run the spec validators (no unsourced literal, cycle, unresolved term, threshold gap). \\
+\tabsize A5 & \tabsize Code & \tabsize Independently re-verify every quotation, seal the spec, run semantic checks (a threshold or constant must appear in its own quote, comparison direction, unused or invented inputs). Render the formula from the AST for the reviewer. \\
+\tabsize A6 & \tabsize \textbf{Human} & \tabsize Types the first 12 hash characters of the spec shown. A signer issues an attestation over spec hash, approver, role, decision and time. Unresolved items, failed checks and unread amendments \textbf{block} approval. \\
+\tabsize A7 & \tabsize Code & \tabsize Registry re-verifies seal and attestation; versions are effective-dated and never overwritten. \\
+\tabsize B1--B5 & \tabsize AI, code, human & \tabsize Facts are extracted and sealed (quote, printed amount and scale, grounded tie-outs). The \ct{Decimal} evaluator traces every node, applies the contract's rounding, classifies, and appends a hash-chained record. BREACH, INDETERMINATE, thin headroom and a 10\% sample go to a human. \\
+\bottomrule
+\end{tabularx}
+
+\textbf{Knowledge management.} Contract meaning lives in the approved, signed, versioned spec (code, not model weights); evidence lives in hash-pinned documents; bank policy (thin-headroom \%, sampling, OCR floor) lives in a policy object whose hash is stored in every result. \textbf{When knowledge becomes invalid:} an amendment is a new spec version that applies only from its effective date (retroactive only if it cites a clause that says so); a restatement marks results built on the old facts stale; a revoked spec blocks the periods it governed until a corrected one is approved, and never falls back to the older version. All are ledger events; nothing is edited.
+
+\textbf{Audit lineage.} \ct{status} $\rightarrow$ \ct{ratio} $\rightarrow$ \ct{trace step} $\rightarrow$ \ct{fact} $\rightarrow$ statement line, and \ct{constant} $\rightarrow$ quotation $\rightarrow$ \ct{(document hash, page, offsets)}. The pinned engine version re-runs sealed inputs to the same result (\ct{replay\_result}).
+
+%------------------------------------------------------------------
+\section{What is built, and the evidence}
+\textbf{Built and tested (246 tests, offline; mypy clean).} Typed models (\ct{Decimal} only, frozen, tuples); AST evaluator with a per-node trace and the conditional node the real cash cap needed; trusted verification and seals; signed approval attestations; effective-dated registry; hash-chained ledger; SEC ingestion with hash-pinned pages; deterministic clause selection; strict extraction parser; reviewer view and CLI; an OpenRouter provider (timeouts, 429 retry, truncation checks, no tools offered). A script (\ct{tools/mutation\_check.py}) breaks 28 guarantees one at a time to check the tests notice; all were caught.
+
+\textbf{On the real agreement.} The approved spec (7 defined terms, 20 inputs, cited page and offsets) gives, for a synthetic borrower on 31 Dec 2022: EBITDA before clause~(d) 184.0; add-back cap $20.0\% \times 184.0 = 36.8$ (not the 40 claimed); netted cash $\min(120,50)=50$ because revolver borrowings of 25 exceed 10; net funded debt 805; ratio $805/220.8 = \mathbf{3.646}\times$ against the amended $\mathbf{4.75}\times$: PASS, 23.2\% headroom. The same inputs on 30 Jun 2023 face $4.00\times$ and are PASS with thin headroom, which goes to review.
+
+\textbf{Not done, stated plainly.} (1)~\textbf{No live model run}: no API key was available, so no genuine LLM extraction exists. The provider is tested against a fake transport only. (2)~The extraction used in the demo is a \textbf{reference I had the coding assistant hand-write} from the real text; it is labelled ``NOT A LIVE MODEL CALL''. (3)~The scorecard that checks an extraction against the contract's key facts was written by the same assistant, so a perfect reference score is circular; its tests show it fails on wrong extractions. (4)~The demo approval is simulated. (5)~Designed but not built: compliance-certificate back-test, two independent extractions diffed, hidden-text detection, amendment register, KMS signing and multi-signer approval, persistent ledger, OCR.
+
+%------------------------------------------------------------------
+\section{Risks}
+\textbf{Weakest link: a wrong but well-sourced spec at the approval gate.} A quotation can be real and the reading wrong (the wrong cap, the pre-amendment definition, numerator and denominator swapped). A test in the repository shows it: a swapped ratio passes every machine check, and only the readable formula exposes it. Because the spec drives every test for years, an error repeats. \textbf{Built:} semantic checks (e.g.\ 0.25 cited to a quote that says ``20.0\%'' is refused), the AST-generated plain formula, signed approval bound to the displayed hash, a clean-pass sample, the scorecard. \textbf{Designed only:} back-test against the borrower's historical certificates, two extractions diffed.
+
+\smallskip
+\begin{tabularx}{\linewidth}{@{}l Y Y@{}}
+\toprule
+\tabsize\textbf{Input} & \tabsize\textbf{Failure mode} & \tabsize\textbf{Response (built unless marked \emph{designed})} \\
+\midrule
+\tabsize\textbf{Noisy} & \tabsize Look-alike characters, ``20 .0\%'' artefacts, scanned pages, scale errors & \tabsize Canonicalised text; exact unique quotes; OCR pages refused; printed amount and scale checked; tie-outs must sum. OCR ingestion \emph{designed}. \\
+\midrule
+\tabsize\textbf{Incomplete} & \tabsize Amendment not provided; terms referenced but not read; missing input & \tabsize Known amendments listed, approval blocked if unread; unread terms reported; missing input is INDETERMINATE; no spec governs undated periods. Amendment register \emph{designed}. \\
+\midrule
+\tabsize\textbf{Adversarial} & \tabsize Prompt injection in a document; invented or paraphrased quote; model supplying \ct{verified} or an approval & \tabsize Text is data; response schema has no tool field and forbidden keys reject the whole answer; quote must exist exactly; extractor and automated identities cannot approve; seals and attestations re-verified. Hidden-text detection \emph{designed}. \\
+\bottomrule
+\end{tabularx}
+
+\smallskip
+\begin{tabularx}{\linewidth}{@{}l Y@{}}
+\toprule
+\tabsize\textbf{Risk} & \tabsize\textbf{Handling} \\
+\midrule
+\tabsize\textbf{Wrong answer} & \tabsize Typed AST, \ct{Decimal}, one \ct{classify()}, results re-derived on construction; INDETERMINATE by default; two human gates; replay. \\
+\tabsize\textbf{Outdated rules} & \tabsize Versioned, effective-dated specs; amendment, restatement and revocation are different ledger events. \\
+\tabsize\textbf{Confidential data} & \tabsize The prototype uses public filings and synthetic data. Real borrower material needs a model inside the lender's boundary (a hosted free-tier model is not acceptable for it). \\
+\tabsize\textbf{Liability} & \tabsize The credit officer is accountable for each approval and finding; the system sends no notices. The development signer proves a record was not altered; it does \textbf{not} authenticate the approver. Production needs KMS signing and SSO identity. \\
+\bottomrule
+\end{tabularx}
+
+%------------------------------------------------------------------
+\section{Alternatives considered and rejected}
+\begin{enumerate}[leftmargin=1.4em,itemsep=2pt]
+\item \textbf{One long-context LLM call returns the ratio.} Rejected: arithmetic is non-reproducible, silent errors have no tie-out, lineage is a story rather than a trace.
+\item \textbf{Per-quarter RAG ``chat with the contract''.} Rejected: definitions are re-read each quarter, so Q1 and Q3 can differ; no versioned knowledge and no proof of which clause applied.
+\item \textbf{Rules and templates only.} Rejected: exact but brittle; the real agreement's conditional cash cap, sub-capped add-backs and rounding clause break any fixed template. Kept for the engine, dropped for ingestion.
+\end{enumerate}
+Also rejected: routing by LLM self-reported confidence (uncalibrated) and LLM-written Python for the maths (unreviewable; the closed AST is).
+
+%------------------------------------------------------------------
+\section{Before spending more time on this}
+Run live extractions with a real model on at least 10 agreements and publish the failures using the scorecard. Validate the 4.5\,h per test and the amendment-completeness assumption with practitioners. Build the certificate back-test, since it is the only control that checks the \emph{meaning} of a spec. Confirm data-residency terms and the loan system the results must feed.
+
+%------------------------------------------------------------------
+\clearpage
+\section*{Appendix: What you added beyond the AI}
+
+\textbf{Where AI helped.} Claude (Cursor cloud agent) wrote nearly all the code, tests and documents. Key prompts (excerpts): (1)~\emph{``Act as a Principal Agentic AI Architect\ldots\ enforce strict separation between probabilistic nodes (LLM extraction, RAG) and deterministic execution engines (Pydantic, ratio math, rules)\ldots''} (2)~\emph{``Do not assume that the existing implementation is correct merely because tests pass\ldots\ The LLM must never perform financial calculations that determine the final covenant result.''} (3)~\emph{``The LLM should interpret the contract, but the deterministic engine must remain the sole authority for financial calculations and covenant classification.''}
+
+\textbf{What was wrong, and how it was caught.}
+\begin{itemize}[leftmargin=1.4em,itemsep=2pt]
+\item \emph{Verification that trusted flags.} The AI's first draft let a caller set \ct{verified=True} or a tie-out \ct{passed=True}, and hardcoded a 10\% headroom rule. A review prompt I wrote made the AI reproduce six defects by running code; they became sealed artefacts, derived tie-outs and a policy object.
+\item \emph{A gap the AI found in its own fix.} While writing the prompt-injection test the AI saw that tie-out components were still the extractor's word, and made each one a quoted, summed source line.
+\item \emph{Four bugs the tests exposed:} a canonicaliser that mis-paired nested quotes, a clause search that ran out of budget before the cash definition, a false-positive ``constant denominator'' check, and an old test whose blanket import ban the new download code correctly broke. The AI narrowed that assertion, with a documented reason, instead of deleting it.
+\item \emph{Unsourced numbers.} The cost figures are the AI's estimates; I labelled them as such.
+\item \emph{Rejected designs:} LLM self-reported confidence as a routing signal (uncalibrated) and LLM-generated Python for the maths (unreviewable).
+\item \emph{Honesty limits I required:} no simulated model call may pass as live; the reference extraction and its scorecard are labelled as written by the AI.
+\end{itemize}
+
+\textbf{What came from me.} I chose covenant monitoring over rebate reconciliation. I set the rule that the LLM never touches a number in the ratio path, required the four audit questions (knowledge, lineage, weakest link, rejected alternatives) to drive the structure, and demanded a real public agreement and no pretending that a replay was a model. I required the development signer to be kept apart from a production one and not to be called identity authentication. I expected secondary sub-caps inside EBITDA add-backs to force dynamic sub-trees; the real filing confirmed it (a 20.0\% cap, a conditional cash cap, a rounding clause). I chose to stay with this project after weighing alternatives.
+
+\textbf{One concept I can defend live without AI: what ``deterministic'' guarantees and what it does not.} Synthetic borrower: debt 540, cash 40, EBITDA 100, add-backs 40, add-backs capped at 25\% of 100. Capped EBITDA $= 100 + \min(40,25) = 125$; net debt $= 540 - 40 = 500$; ratio $500/125 = \mathbf{4.00}\times$ against $4.50\times$, headroom 11.1\%, PASS. Without the cap it would be $3.57\times$, an overstated pass. Rounding precedes the comparison, so $4.504$ is $4.50$ and passes while $4.505$ is $4.51$ and breaches (half-up). \ct{Decimal} is used because binary floats cannot hold these values exactly. The limit: quotation checks prove a quote exists and the spec is consistent, not that it \emph{means} what the contract means. That gap is why the human gate exists.
+
+\end{document}
